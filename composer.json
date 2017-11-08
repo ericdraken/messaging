@@ -13,12 +13,19 @@
       "homepage": "https://ericdraken.com"
     }
   ],
+  "repositories": [
+    {
+      "type": "vcs",
+      "url": "http://github.com/ericdraken/config"
+    }
+  ],
   "require": {
     "php": "^7.0",
     "psr/log": "^1.0",
     "guzzlehttp/guzzle": "^6.3",
     "guzzlehttp/promises": "^1.0",
-    "symfony/process": "^3.1"
+    "symfony/process": "^3.1",
+    "hassankhan/config": "dev-master"
   },
   "require-dev": {
     "phpunit/phpunit": "^6.3",

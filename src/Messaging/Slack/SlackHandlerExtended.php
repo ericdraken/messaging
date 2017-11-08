@@ -11,7 +11,6 @@ namespace Draken\Messaging\Slack;
 use Monolog\Logger;
 use Monolog\Handler\SlackHandler;
 use Monolog\Formatter\LineFormatter;
-use Monolog\Handler\MissingExtensionException;
 
 /**
  * Sends notifications through Slack API
@@ -38,23 +37,19 @@ class SlackHandlerExtended extends SlackHandler
 
 	/**
 	 * @param  string $channel Slack channel (encoded ID or name)
-	 * @param  string $token Slack API token
-	 * @param  string $envVariable Environment variable to hold the slackbot token
-	 * @param  bool $useAttachment Whether the message should be added to Slack as attachment (plain text otherwise)
-	 * @param  bool $bubble Whether the messages that are handled can bubble up the stack or not
-	 * @param  bool $useShortAttachment Whether the the context/extra messages added to Slack as attachments are in a short style
-	 * @param  bool $includeContextAndExtra Whether the attachment should include context and extra data
-	 *
-	 * @throws MissingExtensionException If no OpenSSL PHP extension configured
+	 * @param  string|null $token Slack API token
+	 * @param  string|null $envVariable Environment variable to hold the slackbot token
+	 * @param  string|null $messageFormat Message format of the Slack message
+	 * @param  string|null $dateFormat The format of the timestamp: one supported by DateTime::format
+	 * @param  bool $includeStackTrace Include a stack trace or not
 	 */
 	public function __construct(
-		$channel,
-		$token = null,
-		$envVariable = null,
-		$useAttachment = false,
-		$bubble = true,
-		$useShortAttachment = false,
-		$includeContextAndExtra = false
+		string $channel,
+		string $token = null,
+		string $envVariable = null,
+		string $messageFormat = null,
+		string $dateFormat = null,
+		bool $includeStackTrace = false
 	) {
 		// Get the slackbot token from the ENV variable
 		$token ?: $token = getenv( $envVariable ? $envVariable : 'SLACKBOT_TOKEN' );
@@ -70,16 +65,21 @@ class SlackHandlerExtended extends SlackHandler
 			$token,
 			$channel,
 			null,
-			$useAttachment,
+			false,
 			null,
 			Logger::DEBUG,
-			$bubble,
-			$useShortAttachment,
-			$includeContextAndExtra
+			true,
+			false,
+			false
 		);
 
+		$formatter = $this->slackFormatter( $messageFormat, $dateFormat );
+
+		// Optional stack trace
+		$formatter->includeStacktraces( $includeStackTrace );
+
 		// Set the Slack formatter now, here
-		parent::setFormatter( $this->slackFormatter() );
+		parent::setFormatter( $formatter );
 
 		// Set a short timeout to prevent blocking for too long
 		self::setTimeout( $this->timeoutSeconds );
@@ -111,17 +111,21 @@ class SlackHandlerExtended extends SlackHandler
 
 	/**
 	 * Create a formatter for Slack
+	 *
+	 * @param string|null $messageFormat
+	 * @param string|null $dateFormat
+	 *
 	 * @return LineFormatter
 	 */
-	private function slackFormatter()
+	private function slackFormatter( string $messageFormat = null, string $dateFormat = null ): LineFormatter
 	{
 		// The default output format is "[%datetime%] %channel%.%level_name%: %message% %context% %extra%\n"
-		// $output = "%datetime% > %level_name% > %message% %context% %extra%\n";
+		// $format = "%datetime% > %level_name% > %message% %context% %extra%\n";
 
 		// Our messages will have an icon and the bot name will be the log level
-		$output = "[%datetime%] %message% %context% %extra%\n";
+		$format = $messageFormat ?? "[%datetime%] %message% %context% %extra%";
 
 		// Create the formatter
-		return new LineFormatter( $output, '', false, true ); // Ignore blank extras);
+		return new LineFormatter( $format, $dateFormat, false, true );
 	}
 }

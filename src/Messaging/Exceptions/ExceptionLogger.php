@@ -6,56 +6,45 @@
  * Copyright (c) 2017
  */
 
+namespace Draken\Messaging\Exceptions;
+
+use Draken\Messaging\Slack\SlackConfig;
 use Draken\Messaging\Slack\SlackHandlerExtended;
-use Monolog\ErrorHandler;
 use Monolog\Handler\FingersCrossed\ErrorLevelActivationStrategy;
 use Monolog\Handler\FingersCrossedHandler;
+use Monolog\ErrorHandler;
 use Monolog\Logger;
 
 /**
- * FIXME: Redo this text
- * Class \SlackApacheException\Logger
- * This class sets up an Apache logger and a
- * Slack logger using for both FingersCrossed handler
- * to delay the invocation of the handlers until a
- * significant event occurs. Plus, the global error
- * handler will trigger an alert as well
- * @package SlackApacheException
+ * Using configurations set in an external config file, register a Monolog
+ * logger that will log exceptions and notices above a set threshold. This logger
+ * uses a fingers crossed handler to only connect to Slack when a message is ready,
+ * and to batch messages until a log level threshold is crossed
+ * @package Draken\Messaging\Exceptions
  */
 class ExceptionLogger
 {
-	/**
-	 * Default timezone of messages
-	 * @var string
-	 */
-	private $defaultTimezone = "America/Los_Angeles";
-
-	/**
-	 * Hold the principle logger
-	 * @var Logger
-	 */
+	/** @var Logger */
 	private $logger;
 
 	/** @var ExceptionLogger */
 	private static $instance;
 
+	/** @var SlackConfig */
+	private static $config;
+
 	/**
 	 * ExceptionLogger constructor.
 	 *
-	 * @param string $channel
 	 * @param int $activationLevel
 	 */
-	private function __construct( string $channel, int $activationLevel = Logger::NOTICE )
+	private function __construct( int $activationLevel = Logger::NOTICE )
 	{
 		// Create a new logger
-		$this->logger = new Logger( $channel );
-
-		// Set the timezone used for the messages here
-		// FIXME: Use system timezone if available
-		Logger::setTimezone( new \DateTimeZone( $this->defaultTimezone ) );
+		$this->logger = new Logger( __CLASS__ );
 
 		// Register a Slack handler
-		$this->registerSlackFingersCrossedHandler( $channel, $activationLevel );
+		$this->registerSlackFingersCrossedHandler( $activationLevel );
 
 		// Register the global error handler
 		ErrorHandler::register( $this->logger );
@@ -72,14 +61,30 @@ class ExceptionLogger
 	/**
 	 * Call once before calling getInstance()
 	 *
-	 * @param string $channel
+	 * @param string|null $iniFile
 	 * @param int $activationLevel
 	 */
-	public static function setupExceptionLogger( string $channel = 'general', int $activationLevel = Logger::NOTICE )
+	public static function setupExceptionLogger( string $iniFile = null, int $activationLevel = Logger::NOTICE )
 	{
 		if ( is_null( self::$instance ) )
 		{
-			self::$instance = new self( $channel, $activationLevel );
+			self::$config = new SlackConfig( $iniFile );
+
+			// Get the timezone in order from supplied, environment variables, or default
+			$timezone =
+				self::$config->get( 'timezone' ) ?:
+				(
+					! empty( $tz = date_default_timezone_get() ) ? $tz :
+					(
+						! empty( $tz = ini_get('date.timezone') ) ? $tz :
+						'America/Vancouver'
+					)
+				);
+
+			// Set the timezone used for the messages here
+			Logger::setTimezone( new \DateTimeZone( $timezone ) );
+
+			self::$instance = new self( $activationLevel );
 		}
 	}
 
@@ -98,28 +103,66 @@ class ExceptionLogger
 	}
 
 	/**
-	 * @param string $channel
 	 * @param int $activationLevel
 	 */
-	private function registerSlackFingersCrossedHandler( string $channel, int $activationLevel = Logger::NOTICE )
+	private function registerSlackFingersCrossedHandler( int $activationLevel = Logger::NOTICE )
 	{
 		// Activate the handler after this threshold
 		$activationStrategy = new ErrorLevelActivationStrategy( $activationLevel );
 
 		// Setup the FingersCrossed handler which contains the SlackHandlerExtended
-		$fingersCrossedHandler = new FingersCrossedHandler( function () use ( $channel ) {
-			// The handler below is only called upon activation
-			// to save the overhead of setting up a WebSocket to Slack
-			// until the actual error is triggered
-			$slackHandler = new SlackHandlerExtended( $channel );
+		$fingersCrossedHandler = new FingersCrossedHandler(
+			\Closure::bind(
+				function ()
+				{
+					// Get the channel in order from environment variable or default.
+					// Use the environment variable first in case it is desired to
+					// send an exception log to a specific channel at exception time
+					$channel =
+						getenv( self::$config->get( 'channelEnvVarName' ) ) ?:
+						(
+							self::$config->get( 'defaultChannel' ) ??
+							'general'
+						);
 
-			// Add extra information to the log
-			// e.g. {"url":"/monolog/test.php","ip":"192.168.40.1","http_method":"GET","server":"api.example.local","referrer":null}
-			$slackHandler->pushProcessor( new \Monolog\Processor\WebProcessor() );
+					// The handler below is only called upon activation
+					// to save the overhead of setting up a WebSocket to Slack
+					// until the actual error is triggered
+					$slackHandler = new SlackHandlerExtended(
+						$channel,
+						self::$config->get( 'slackApiToken' ),
+						self::$config->get( 'slackApiTokenEnvVarName' ),
+						self::$config->get( 'messageFormat' ),
+						self::$config->get( 'dateFormat' ),
+						self::$config->get( 'includeStackTrace', false )
+					);
 
-			// Return the new handler
-			return $slackHandler;
-		},
+					// Add extra information to the log by pushing Slack handlers
+					// from the config file, if they are present
+					$processors = self::$config->get( 'processors', [] );
+
+					if ( is_array( $processors ) )
+					{
+						// Remove duplicate processors
+						$processors = array_unique( $processors, SORT_STRING );
+
+						foreach ( $processors as $processor )
+						{
+							if ( class_exists( $processor ) )
+							{
+								$slackHandler->pushProcessor( new $processor() );
+							} else
+							{
+								throw new \RuntimeException( "Processor could not be found: $processor" );
+							}
+						}
+					}
+
+					// Return the new handler
+					return $slackHandler;
+				},
+				$this
+			),
 			$activationStrategy
 		);
 

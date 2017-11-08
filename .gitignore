@@ -1,7 +1,6 @@
+/ini/
 /testing/
 /vendor/
-/node_modules/
-!package-lock.json
 composer.lock
 .idea
 *.patch
